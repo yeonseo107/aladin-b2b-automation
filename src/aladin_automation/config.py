@@ -29,3 +29,26 @@ def get_ttb_key() -> str:
             "(키 발급: http://blog.aladin.co.kr/openapi )"
         )
     return key
+
+
+def _nlk_key_value() -> str | None:
+    key = os.getenv("NLK_CERT_KEY")
+    if not key or key.startswith("YOURKEY"):
+        return None
+    return key
+
+
+def has_nlk_key() -> bool:
+    """국립중앙도서관 서지 API 키 설정 여부 (보강 기능 활성화 판단용)."""
+    return _nlk_key_value() is not None
+
+
+def get_nlk_cert_key() -> str:
+    """국립중앙도서관 seoji cert_key 반환. 없으면 안내 예외."""
+    key = _nlk_key_value()
+    if key is None:
+        raise RuntimeError(
+            "NLK_CERT_KEY가 설정되지 않았습니다. "
+            ".env에 발급받은 키를 넣어주세요. (발급: https://www.nl.go.kr/seoji )"
+        )
+    return key

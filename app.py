@@ -15,7 +15,9 @@ import streamlit as st
 from aladin_automation.ai_parser import parse_freeform_text
 from aladin_automation.aladin_client import AladinClient
 from aladin_automation.cli import resolve_row
+from aladin_automation.config import has_nlk_key
 from aladin_automation.matching import MatchStatus
+from aladin_automation.nlk_client import NLKClient
 from aladin_automation.parser import InputRow, load_requests
 from aladin_automation.quote import build_quote_lines, generate_quote_excel
 from aladin_automation.settlement import generate_settlement_excel, reconcile
@@ -30,6 +32,12 @@ OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "output"
 @st.cache_resource
 def get_client() -> AladinClient:
     return AladinClient()
+
+
+@st.cache_resource
+def get_nlk():
+    """국중도 보강 클라이언트 (키 있을 때만). 없으면 None."""
+    return NLKClient() if has_nlk_key() else None
 
 
 def _save_upload(uploaded) -> Path:
@@ -51,7 +59,10 @@ def _render_quote(rows: list[InputRow], client_name: str, discount: float) -> No
         prog.progress(i / len(rows), text=f"매칭 중… {i}/{len(rows)}")
     prog.empty()
 
-    lines = build_quote_lines(results, discount_rate=discount)
+    nlk = get_nlk()
+    if nlk:
+        st.caption("📚 국립중앙도서관 서지 보강·교차검증 켜짐 (KDC·판사항·검증)")
+    lines = build_quote_lines(results, discount_rate=discount, nlk_client=nlk)
     conf = sum(1 for ln in lines if ln.status == MatchStatus.CONFIRMED.value)
     rev = sum(1 for ln in lines if ln.status == MatchStatus.REVIEW.value)
     total = sum(ln.supply_amount for ln in lines if ln.status == MatchStatus.CONFIRMED.value)
@@ -65,7 +76,9 @@ def _render_quote(rows: list[InputRow], client_name: str, discount: float) -> No
     df = pd.DataFrame([{
         "상태": ln.status, "입력도서명": ln.input_title, "매칭도서명": ln.matched_title,
         "ISBN13": ln.isbn13, "정가": ln.price_standard, "공급단가": ln.supply_unit_price,
-        "수량": ln.qty, "공급가": ln.supply_amount, "신뢰도": ln.confidence, "비고": ln.reasons,
+        "수량": ln.qty, "공급가": ln.supply_amount,
+        "KDC": ln.kdc, "판사항": ln.edition, "국중도": ln.nlk_verified_label,
+        "신뢰도": ln.confidence, "비고": ln.reasons,
     } for ln in lines])
     st.dataframe(df, use_container_width=True, hide_index=True)
 

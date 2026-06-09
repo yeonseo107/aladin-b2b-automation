@@ -18,13 +18,14 @@ import pandas as pd
 
 from .config import PROJECT_ROOT
 from .matching import MatchResult, MatchStatus
+from .nlk_client import verify_against
 
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "output"
 
 
 @dataclass
 class QuoteLine:
-    """견적서 한 줄: 입력 + 매칭 + 계산 결과."""
+    """견적서 한 줄: 입력 + 매칭 + 계산 결과 (+ 국중도 보강)."""
 
     input_title: str
     input_author: str
@@ -41,6 +42,14 @@ class QuoteLine:
     supply_amount: int       # 공급가 (= 공급단가 × 수량)
     confidence: float
     reasons: str
+    # 국립중앙도서관 보강 (키 없으면 비어 있음)
+    kdc: str = ""            # 한국십진분류
+    edition: str = ""        # 판사항
+    nlk_verified: Optional[bool] = None  # None=검증안함/불가, True=일치, False=불일치
+
+    @property
+    def nlk_verified_label(self) -> str:
+        return {True: "일치", False: "불일치"}.get(self.nlk_verified, "-")
 
 
 def _supply_price(price_standard: int, discount_rate: float) -> int:
@@ -48,35 +57,60 @@ def _supply_price(price_standard: int, discount_rate: float) -> int:
     return int(round(price_standard * (1 - discount_rate)))
 
 
+def _append_reason(existing: str, note: str) -> str:
+    return f"{existing}; {note}".strip("; ") if existing else note
+
+
+def _enrich_line(line: QuoteLine, book, nlk_client) -> None:
+    """국중도 서지로 KDC·판사항 보강 + 교차검증. 불일치(확정건)는 검토로 강등."""
+    rec = nlk_client.lookup_isbn(book.isbn13)
+    if rec is None:
+        line.nlk_verified = None  # 국가 서지에 없음 → 검증 불가(반증 아님)
+        line.reasons = _append_reason(line.reasons, "국중도 서지 없음(검증 불가)")
+        return
+    line.kdc, line.edition = rec.kdc, rec.edition
+    verified, why = verify_against(book.title, book.publisher, rec)
+    line.nlk_verified = verified
+    if not verified:
+        line.reasons = _append_reason(line.reasons, f"국중도 교차검증 실패: {why}")
+        if line.status == MatchStatus.CONFIRMED.value:
+            line.status = MatchStatus.REVIEW.value
+
+
 def build_quote_lines(
     results: list[tuple[MatchResult, int]],
     discount_rate: float,
+    nlk_client=None,
 ) -> list[QuoteLine]:
-    """(매칭결과, 수량) 목록 → 공급가 계산된 견적 라인 목록."""
+    """(매칭결과, 수량) 목록 → 공급가 계산된 견적 라인 목록.
+
+    nlk_client가 주어지면 매칭된 도서를 국립중앙도서관 서지로 보강·교차검증한다.
+    """
     lines: list[QuoteLine] = []
     for result, qty in results:
         book = result.book
         if book is not None:
             unit = _supply_price(book.price_standard, discount_rate)
-            lines.append(
-                QuoteLine(
-                    input_title=result.query_title,
-                    input_author=result.query_author,
-                    qty=qty,
-                    status=result.status.value,
-                    matched_title=book.title,
-                    isbn13=book.isbn13,
-                    publisher=book.publisher,
-                    pub_date=book.pub_date,
-                    price_standard=book.price_standard,
-                    price_sales=book.price_sales,
-                    stock_status=book.stock_status or "정상",
-                    supply_unit_price=unit,
-                    supply_amount=unit * qty,
-                    confidence=result.confidence,
-                    reasons="; ".join(result.reasons),
-                )
+            line = QuoteLine(
+                input_title=result.query_title,
+                input_author=result.query_author,
+                qty=qty,
+                status=result.status.value,
+                matched_title=book.title,
+                isbn13=book.isbn13,
+                publisher=book.publisher,
+                pub_date=book.pub_date,
+                price_standard=book.price_standard,
+                price_sales=book.price_sales,
+                stock_status=book.stock_status or "정상",
+                supply_unit_price=unit,
+                supply_amount=unit * qty,
+                confidence=result.confidence,
+                reasons="; ".join(result.reasons),
             )
+            if nlk_client is not None:
+                _enrich_line(line, book, nlk_client)
+            lines.append(line)
         else:  # 매칭 실패
             lines.append(
                 QuoteLine(
@@ -113,6 +147,9 @@ _QUOTE_COLS = [
     ("supply_unit_price", "공급단가"),
     ("supply_amount", "공급가"),
     ("stock_status", "재고상태"),
+    ("kdc", "KDC분류"),
+    ("edition", "판사항"),
+    ("nlk_verified_label", "국중도검증"),
     ("confidence", "신뢰도"),
     ("reasons", "비고"),
 ]

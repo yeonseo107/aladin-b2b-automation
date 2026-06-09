@@ -8,7 +8,9 @@ import argparse
 from pathlib import Path
 
 from .aladin_client import AladinClient
+from .config import has_nlk_key
 from .matching import MatchResult, MatchStatus, match
+from .nlk_client import NLKClient
 from .parser import InputRow, load_requests
 from .quote import build_quote_lines, generate_quote_excel
 
@@ -45,7 +47,10 @@ def run(args: argparse.Namespace) -> int:
         results.append((result, row.qty))
         print(f"  [{i}/{len(rows)}] {row.title} → {result.status.value} (신뢰도 {result.confidence})")
 
-    lines = build_quote_lines(results, discount_rate=args.discount)
+    nlk = NLKClient() if has_nlk_key() else None
+    if nlk:
+        print("  국중도 서지 보강·교차검증: 켜짐")
+    lines = build_quote_lines(results, discount_rate=args.discount, nlk_client=nlk)
     out = generate_quote_excel(
         lines,
         discount_rate=args.discount,
