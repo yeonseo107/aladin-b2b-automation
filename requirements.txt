@@ -11,6 +11,10 @@ openpyxl==3.1.5
 # 환경변수 관리 (TTBKey)
 python-dotenv==1.0.1
 
+# AI 비정형 입력 파싱 (Claude)
+anthropic==0.107.1
+pydantic==2.9.2
+
 # 간단 UI (사내 운영툴 프로토타입)
 streamlit==1.39.0
 

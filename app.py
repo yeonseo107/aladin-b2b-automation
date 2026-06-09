@@ -12,10 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 import pandas as pd
 import streamlit as st
 
+from aladin_automation.ai_parser import parse_freeform_text
 from aladin_automation.aladin_client import AladinClient
 from aladin_automation.cli import resolve_row
 from aladin_automation.matching import MatchStatus
-from aladin_automation.parser import load_requests
+from aladin_automation.parser import InputRow, load_requests
 from aladin_automation.quote import build_quote_lines, generate_quote_excel
 from aladin_automation.settlement import generate_settlement_excel, reconcile
 
@@ -38,7 +39,42 @@ def _save_upload(uploaded) -> Path:
     return tmp
 
 
-tab_quote, tab_settle = st.tabs(["🧾 견적 생성", "🔍 정산 대조"])
+def _render_quote(rows: list[InputRow], client_name: str, discount: float) -> None:
+    """InputRow 목록 → 매칭·견적 실행 후 결과 표/지표/다운로드 렌더."""
+    if not rows:
+        st.warning("처리할 도서가 없습니다.")
+        return
+    client = get_client()
+    results, prog = [], st.progress(0.0, text="매칭 중…")
+    for i, row in enumerate(rows, 1):
+        results.append((resolve_row(client, row, 5), row.qty))
+        prog.progress(i / len(rows), text=f"매칭 중… {i}/{len(rows)}")
+    prog.empty()
+
+    lines = build_quote_lines(results, discount_rate=discount)
+    conf = sum(1 for ln in lines if ln.status == MatchStatus.CONFIRMED.value)
+    rev = sum(1 for ln in lines if ln.status == MatchStatus.REVIEW.value)
+    total = sum(ln.supply_amount for ln in lines if ln.status == MatchStatus.CONFIRMED.value)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("총 종수", len(lines))
+    m2.metric("자동 확정", conf)
+    m3.metric("검토 필요", rev)
+    m4.metric("확정 공급가", f"{total:,}원")
+
+    df = pd.DataFrame([{
+        "상태": ln.status, "입력도서명": ln.input_title, "매칭도서명": ln.matched_title,
+        "ISBN13": ln.isbn13, "정가": ln.price_standard, "공급단가": ln.supply_unit_price,
+        "수량": ln.qty, "공급가": ln.supply_amount, "신뢰도": ln.confidence, "비고": ln.reasons,
+    } for ln in lines])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    out = generate_quote_excel(lines, discount_rate=discount, client_name=client_name, output_dir=OUTPUT_DIR)
+    st.download_button("📥 견적서 엑셀 다운로드", out.read_bytes(), file_name=out.name,
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+tab_quote, tab_settle, tab_ai = st.tabs(["🧾 견적 생성", "🔍 정산 대조", "✉️ 메일/텍스트 파싱"])
 
 # ---------- 견적 생성 ----------
 with tab_quote:
@@ -50,36 +86,7 @@ with tab_quote:
     up = st.file_uploader("도서 요청 목록", type=["csv", "xlsx"], key="q_up")
 
     if up and st.button("견적 생성", type="primary", key="q_run"):
-        rows = load_requests(_save_upload(up))
-        client = get_client()
-        results, prog = [], st.progress(0.0, text="매칭 중…")
-        for i, row in enumerate(rows, 1):
-            results.append((resolve_row(client, row, 5), row.qty))
-            prog.progress(i / len(rows), text=f"매칭 중… {i}/{len(rows)}")
-        prog.empty()
-
-        lines = build_quote_lines(results, discount_rate=discount)
-        conf = sum(1 for ln in lines if ln.status == MatchStatus.CONFIRMED.value)
-        rev = sum(1 for ln in lines if ln.status == MatchStatus.REVIEW.value)
-        fail = sum(1 for ln in lines if ln.status == MatchStatus.FAILED.value)
-        total = sum(ln.supply_amount for ln in lines if ln.status == MatchStatus.CONFIRMED.value)
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("총 종수", len(lines))
-        m2.metric("자동 확정", conf)
-        m3.metric("검토 필요", rev)
-        m4.metric("확정 공급가", f"{total:,}원")
-
-        df = pd.DataFrame([{
-            "상태": ln.status, "입력도서명": ln.input_title, "매칭도서명": ln.matched_title,
-            "ISBN13": ln.isbn13, "정가": ln.price_standard, "공급단가": ln.supply_unit_price,
-            "수량": ln.qty, "공급가": ln.supply_amount, "신뢰도": ln.confidence, "비고": ln.reasons,
-        } for ln in lines])
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-        out = generate_quote_excel(lines, discount_rate=discount, client_name=client_name, output_dir=OUTPUT_DIR)
-        st.download_button("📥 견적서 엑셀 다운로드", out.read_bytes(), file_name=out.name,
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        _render_quote(load_requests(_save_upload(up)), client_name, discount)
 
 # ---------- 정산 대조 ----------
 with tab_settle:
@@ -116,3 +123,34 @@ with tab_settle:
         out = generate_settlement_excel(lines, discount_rate=s_disc, client_name=s_client, output_dir=OUTPUT_DIR)
         st.download_button("📥 정산 리포트 다운로드", out.read_bytes(), file_name=out.name,
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ---------- 메일/텍스트 파싱 (AI) ----------
+with tab_ai:
+    st.subheader("메일/자유 텍스트 → 견적")
+    st.write("거래처가 보낸 자유 형식 메일을 붙여넣으면 Claude가 도서 목록을 추출하고, 바로 견적서를 만듭니다.")
+    c1, c2 = st.columns(2)
+    a_client = c1.text_input("거래처명", value="가상도서관", key="a_client")
+    a_disc = c2.slider("납품 할인율", 0.0, 0.5, 0.10, 0.01, key="a_disc")
+    text = st.text_area(
+        "메일/요청 텍스트",
+        height=200,
+        placeholder="안녕하세요. 아래 도서 견적 부탁드립니다.\n- 미움받을 용기 5권\n- 아몬드 손원평 3부 ...",
+        key="a_text",
+    )
+
+    if st.button("도서 추출 → 견적 생성", type="primary", key="a_run"):
+        try:
+            with st.spinner("Claude가 도서 목록을 추출 중…"):
+                rows = parse_freeform_text(text)
+        except RuntimeError as e:
+            st.error(str(e))
+            rows = []
+        if rows:
+            st.success(f"{len(rows)}건 추출됨")
+            st.dataframe(
+                pd.DataFrame([{"도서명": r.title, "저자": r.author, "수량": r.qty} for r in rows]),
+                use_container_width=True, hide_index=True,
+            )
+            _render_quote(rows, a_client, a_disc)
+        elif text.strip():
+            st.warning("도서를 추출하지 못했습니다.")
