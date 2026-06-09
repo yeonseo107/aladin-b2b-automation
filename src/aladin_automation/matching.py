@@ -32,6 +32,11 @@ AMBIGUOUS_GAP = 0.06       # 강한 후보 2개 이상의 점수 차가 이보�
 W_TITLE = 0.7
 W_AUTHOR = 0.3
 
+# 단행본 요청 대상이 아닌 묶음/특수포맷 (후보에서 제외)
+_EXCLUDE_FORMAT = re.compile(r"세트|전\s?\d+\s?권|합본|박스\s?세트|큰글자")
+# 내용 자체가 다른 판본 구분자 (있으면 사람 확인 필요) — 단순 표지/에디션 차이와 구분
+_CONTENT_MARKERS = re.compile(r"개정판|개정증보|증보|청소년|영문판|영어판|원서|만화|그림책|필사")
+
 
 @dataclass
 class Candidate:
@@ -111,12 +116,15 @@ def match(query_title: str, query_author: str, books: list[Book], top_n: int = 3
             reasons=["검색 결과 없음"],
         )
 
+    # 세트/합본/큰글자 등 묶음·특수포맷은 단행본 요청 대상이 아니므로 후보에서 제외
+    pool = [b for b in books if not _EXCLUDE_FORMAT.search(b.title)] or books
     ranked = sorted(
-        (score_candidate(query_title, query_author, b) for b in books),
+        (score_candidate(query_title, query_author, b) for b in pool),
         key=lambda c: c.score,
         reverse=True,
     )
     top = ranked[0]
+    chosen = top
 
     reasons: list[str] = []
     status = MatchStatus.CONFIRMED
@@ -126,33 +134,47 @@ def match(query_title: str, query_author: str, books: list[Book], top_n: int = 3
         status = MatchStatus.REVIEW
         reasons.append(f"최고 점수 {top.score} < 확정기준 {CONFIRM_THRESHOLD}")
 
-    # 판본 경쟁: 제목이 거의 동일한 '강한 후보'가 top과 비슷한 점수로 2개 이상
-    # (예: '데미안' 여러 판본, '양장본 vs 일반본') → 사람이 판본 선택해야 함
+    # 제목이 거의 동일한 '강한 후보'가 top과 비슷한 점수로 2개 이상 → 판본 경쟁
     rivals = [
         c for c in ranked
         if c.title_sim >= STRONG_TITLE_SIM and (top.score - c.score) < AMBIGUOUS_GAP
     ]
     if len(rivals) >= 2:
-        status = MatchStatus.REVIEW
-        reasons.append(
-            f"동일 제목 강한 후보 {len(rivals)}건 (점수 {[c.score for c in rivals]}) "
-            "— 판본/개정판 선택 확인 필요"
-        )
+        pubs = {c.book.publisher for c in rivals}
+        content_flags = [bool(_CONTENT_MARKERS.search(c.book.title)) for c in rivals]
+        single_pub = len(pubs) == 1 and "" not in pubs
+        mixed_content = any(content_flags) and not all(content_flags)
+        if single_pub and not mixed_content:
+            # 같은 출판사의 순수 표지/에디션 차이 → 대표 판본 자동 선택
+            # (재고 우선 → 부가표기(괄호) 적음 → 제목 짧음 순으로 표준판 추정)
+            chosen = min(
+                rivals,
+                key=lambda c: (not c.book.is_available, c.book.title.count("("), len(c.book.title)),
+            )
+            reasons.append(
+                f"동일 출판사 판본 {len(rivals)}건 중 대표 자동선택 (다른 판본 {len(rivals) - 1}종 존재)"
+            )
+        else:
+            status = MatchStatus.REVIEW
+            why = "출판사 상이" if not single_pub else "개정판/청소년판 등 내용 구분 존재"
+            reasons.append(
+                f"동일 제목 강한 후보 {len(rivals)}건 ({why}) — 판본 선택 확인 필요"
+            )
 
     # 절판/품절 → 견적 불가 가능성, 검토
-    if not top.book.is_available:
+    if not chosen.book.is_available:
         status = MatchStatus.REVIEW
-        reasons.append(f"재고상태 '{top.book.stock_status}' — 납품 가능 여부 확인 필요")
+        reasons.append(f"재고상태 '{chosen.book.stock_status}' — 납품 가능 여부 확인 필요")
 
-    if status == MatchStatus.CONFIRMED:
+    if status == MatchStatus.CONFIRMED and not reasons:
         reasons.append("제목/저자 일치도 높고 경쟁 후보 없음")
 
     return MatchResult(
         query_title=query_title,
         query_author=query_author,
         status=status,
-        book=top.book,
-        confidence=top.score,
+        book=chosen.book,
+        confidence=chosen.score,
         reasons=reasons,
         candidates=ranked[:top_n],
     )
