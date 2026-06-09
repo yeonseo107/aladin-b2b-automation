@@ -1,0 +1,12 @@
+# 알라딘 B2B 자동화 - 의존성
+# 라이브러리 추가 시 docs/work_log.md 에 사유 기록
+
+# HTTP / API 호출
+requests==2.32.3
+
+# 데이터 처리 (엑셀/CSV)
+pandas==2.2.3
+openpyxl==3.1.5
+
+# 환경변수 관리 (TTBKey)
+python-dotenv==1.0.1
