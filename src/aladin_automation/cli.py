@@ -13,7 +13,7 @@ from .parser import InputRow, load_requests
 from .quote import build_quote_lines, generate_quote_excel
 
 
-def _resolve_row(client: AladinClient, row: InputRow, max_results: int) -> MatchResult:
+def resolve_row(client: AladinClient, row: InputRow, max_results: int) -> MatchResult:
     """한 입력 행을 매칭 결과로. ISBN이 있으면 직접 조회(빠른 경로), 없으면 검색+매칭."""
     if row.isbn:
         book = client.lookup(row.isbn)
@@ -41,7 +41,7 @@ def run(args: argparse.Namespace) -> int:
     client = AladinClient()
     results: list[tuple[MatchResult, int]] = []
     for i, row in enumerate(rows, 1):
-        result = _resolve_row(client, row, args.max_results)
+        result = resolve_row(client, row, args.max_results)
         results.append((result, row.qty))
         print(f"  [{i}/{len(rows)}] {row.title} → {result.status.value} (신뢰도 {result.confidence})")
 
