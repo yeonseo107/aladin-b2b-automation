@@ -10,3 +10,6 @@ openpyxl==3.1.5
 
 # 환경변수 관리 (TTBKey)
 python-dotenv==1.0.1
+
+# 테스트
+pytest==8.3.3
