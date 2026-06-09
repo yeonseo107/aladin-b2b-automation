@@ -16,6 +16,7 @@ docs/
 # === 데이터 (샘플 입력/출력) ===
 data/input/*
 data/output/*
+data/cache/
 !data/input/.gitkeep
 !data/output/.gitkeep
 !data/input/sample_*.csv
