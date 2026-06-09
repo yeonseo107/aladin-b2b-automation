@@ -147,11 +147,15 @@ class AladinClient:
         resp.raise_for_status()
         data = self._parse_json(resp.text)
 
-        # 알라딘은 오류도 200으로 errorCode/errorMessage 필드로 줄 수 있음
+        # 알라딘은 오류도 200으로 errorCode/errorMessage 필드로 줄 수 있음.
+        # errorCode 8(해당 상품 없음)은 예외가 아니라 '결과 없음'으로 처리해 배치가 죽지 않게 한다.
         if "errorCode" in data:
-            raise RuntimeError(
-                f"알라딘 API 오류 {data.get('errorCode')}: {data.get('errorMessage')}"
-            )
+            if str(data.get("errorCode")) == "8":
+                data = {"item": []}
+            else:
+                raise RuntimeError(
+                    f"알라딘 API 오류 {data.get('errorCode')}: {data.get('errorMessage')}"
+                )
 
         if self.use_cache:
             cpath.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
