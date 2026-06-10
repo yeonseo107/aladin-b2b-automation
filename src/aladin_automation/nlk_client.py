@@ -73,7 +73,7 @@ class NLKClient:
         cert_key: Optional[str] = None,
         cache_dir: Path = CACHE_DIR,
         use_cache: bool = True,
-        timeout: int = 10,
+        timeout: int = 8,  # 보강은 best-effort — 라인마다 오래 막지 않도록 짧게
     ) -> None:
         self.cert_key = cert_key or get_nlk_cert_key()
         self.use_cache = use_cache

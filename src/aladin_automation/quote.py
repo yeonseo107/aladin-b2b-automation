@@ -62,8 +62,16 @@ def _append_reason(existing: str, note: str) -> str:
 
 
 def _enrich_line(line: QuoteLine, book, nlk_client) -> None:
-    """국중도 서지로 KDC·판사항 보강 + 교차검증. 불일치(확정건)는 검토로 강등."""
-    rec = nlk_client.lookup_isbn(book.isbn13)
+    """국중도 서지로 KDC·판사항 보강 + 교차검증. 불일치(확정건)는 검토로 강등.
+
+    국중도가 느리거나 도달 불가여도 견적 생성은 멈추지 않는다(보강은 best-effort).
+    """
+    try:
+        rec = nlk_client.lookup_isbn(book.isbn13)
+    except Exception:  # 네트워크/응답 오류 → 보강만 생략, 견적은 정상
+        line.nlk_verified = None
+        line.reasons = _append_reason(line.reasons, "국중도 조회 실패(보강 생략)")
+        return
     if rec is None:
         line.nlk_verified = None  # 국가 서지에 없음 → 검증 불가(반증 아님)
         line.reasons = _append_reason(line.reasons, "국중도 서지 없음(검증 불가)")

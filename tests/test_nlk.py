@@ -80,6 +80,23 @@ def test_enrich_missing_record_does_not_downgrade():
     assert "국중도 서지 없음" in ln.reasons
 
 
+class _BrokenNLK:
+    """lookup_isbn이 네트워크 오류를 던지는 가짜 클라이언트."""
+    def lookup_isbn(self, isbn13):
+        raise ConnectionError("nl.go.kr unreachable")
+
+
+def test_enrich_tolerates_network_failure():
+    # 국중도가 죽어도 견적은 정상 생성돼야 함(보강만 생략)
+    book = make_book("아몬드", price_standard=10000)
+    lines = build_quote_lines([(_confirmed(book), 1)], 0.10, nlk_client=_BrokenNLK())
+    ln = lines[0]
+    assert ln.status == MatchStatus.CONFIRMED.value  # 강등 없음
+    assert ln.nlk_verified is None
+    assert ln.supply_amount == 9000  # 견적 계산은 정상
+    assert "조회 실패" in ln.reasons
+
+
 def test_no_nlk_client_is_backward_compatible():
     book = make_book("아몬드", price_standard=10000)
     lines = build_quote_lines([(_confirmed(book), 1)], 0.10)  # nlk_client 미전달
