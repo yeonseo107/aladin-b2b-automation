@@ -179,7 +179,7 @@ def generate_quote_excel(
     *,
     discount_rate: float,
     client_name: str = "거래처",
-    supplier_name: str = "책나래 도서유통",
+    supplier_name: str = "A사",
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     now: Optional[datetime] = None,
 ) -> Path:
